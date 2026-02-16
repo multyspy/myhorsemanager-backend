@@ -3496,6 +3496,68 @@ async def send_test_email_endpoint(admin_user: dict = Depends(get_admin_user)):
 
 # ==================== FILE DOWNLOAD ENDPOINT ====================
 
+@api_router.get("/download/all")
+async def download_all_files():
+    """Download all modified files as a single ZIP"""
+    import zipfile
+    import io
+    from fastapi.responses import StreamingResponse
+    
+    # Define all files to include
+    frontend_files = [
+        "app.json",
+        "package.json",
+        "app/_layout.tsx",
+        "app/admin.tsx",
+        "app/competitions.tsx",
+        "app/expenses.tsx",
+        "app/forgot-password.tsx",
+        "app/index.tsx",
+        "app/login.tsx",
+        "app/palmares.tsx",
+        "app/register.tsx",
+        "app/reminders.tsx",
+        "app/reports.tsx",
+        "app/riders.tsx",
+        "app/settings.tsx",
+        "app/suppliers.tsx",
+        "src/context/AuthContext.tsx",
+        "src/i18n/index.ts",
+        "src/i18n/translations.ts",
+        "src/utils/api.ts",
+        "src/utils/mediaUtils.ts"
+    ]
+    
+    backend_files = [
+        "server.py",
+        "requirements.txt",
+        "email_service.py"
+    ]
+    
+    # Create ZIP in memory
+    zip_buffer = io.BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        # Add frontend files
+        for filepath in frontend_files:
+            full_path = Path("/app/frontend") / filepath
+            if full_path.exists():
+                zip_file.write(full_path, f"frontend/{filepath}")
+        
+        # Add backend files
+        for filepath in backend_files:
+            full_path = Path("/app/backend") / filepath
+            if full_path.exists():
+                zip_file.write(full_path, f"backend/{filepath}")
+    
+    zip_buffer.seek(0)
+    
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=my-horse-manager-v1.2.4.zip"}
+    )
+
 @api_router.get("/download/{filename}")
 async def download_file(filename: str):
     """Download backend files for GitHub sync"""
