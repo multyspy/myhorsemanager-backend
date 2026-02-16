@@ -204,10 +204,23 @@ def send_email(
         # Create secure connection and send
         context = ssl.create_default_context()
         
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls(context=context)
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(SMTP_USER, to_email, message.as_string())
+        # Try SSL first (port 465), fallback to STARTTLS (port 587)
+        try:
+            if SMTP_PORT == 465:
+                with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context) as server:
+                    server.login(SMTP_USER, SMTP_PASSWORD)
+                    server.sendmail(SMTP_USER, to_email, message.as_string())
+            else:
+                with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+                    server.starttls(context=context)
+                    server.login(SMTP_USER, SMTP_PASSWORD)
+                    server.sendmail(SMTP_USER, to_email, message.as_string())
+        except OSError as e:
+            # If STARTTLS fails, try SSL on port 465
+            logging.warning(f"STARTTLS failed, trying SSL: {e}")
+            with smtplib.SMTP_SSL(SMTP_HOST, 465, context=context) as server:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(SMTP_USER, to_email, message.as_string())
         
         logging.info(f"Email sent successfully to {to_email}")
         return True
