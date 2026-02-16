@@ -3555,6 +3555,129 @@ async def download_frontend_file(filepath: str):
         media_type="application/octet-stream"
     )
 
+@api_router.get("/download/backend/{filepath:path}")
+async def download_backend_file(filepath: str):
+    """Download backend files for GitHub sync"""
+    allowed_paths = [
+        "server.py",
+        "requirements.txt",
+        "email_service.py"
+    ]
+    
+    if filepath not in allowed_paths:
+        raise HTTPException(status_code=404, detail=f"File not allowed: {filepath}")
+    
+    backend_root = Path("/app/backend")
+    file_path = backend_root / filepath
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    return FileResponse(
+        path=str(file_path),
+        filename=filepath,
+        media_type="application/octet-stream"
+    )
+
+# ==================== FEEDBACK ENDPOINT ====================
+
+class FeedbackRequest(BaseModel):
+    message: str
+    app_version: Optional[str] = None
+    platform: Optional[str] = None
+
+@api_router.post("/feedback")
+async def send_feedback(feedback: FeedbackRequest, current_user: dict = Depends(get_current_user)):
+    """Send user feedback via email to the developer"""
+    try:
+        user_email = current_user.get("email", "Unknown")
+        user_name = current_user.get("name", "Unknown")
+        
+        # Build email content
+        email_content = f"""
+        <h2>Nuevo Feedback de My Horse Manager</h2>
+        
+        <h3>Mensaje del usuario:</h3>
+        <div style="background-color: #f5f5f5; padding: 15px; border-radius: 8px; margin: 10px 0;">
+            <p style="white-space: pre-wrap;">{feedback.message}</p>
+        </div>
+        
+        <h3>Información del usuario:</h3>
+        <table style="border-collapse: collapse;">
+            <tr><td style="padding: 5px 15px 5px 0; font-weight: bold;">Nombre:</td><td>{user_name}</td></tr>
+            <tr><td style="padding: 5px 15px 5px 0; font-weight: bold;">Email:</td><td>{user_email}</td></tr>
+            <tr><td style="padding: 5px 15px 5px 0; font-weight: bold;">Versión App:</td><td>{feedback.app_version or 'N/A'}</td></tr>
+            <tr><td style="padding: 5px 15px 5px 0; font-weight: bold;">Plataforma:</td><td>{feedback.platform or 'N/A'}</td></tr>
+        </table>
+        
+        <hr style="margin: 20px 0;">
+        <p style="color: #666; font-size: 12px;">Este mensaje fue enviado desde la app My Horse Manager.</p>
+        """
+        
+        # Try to send email using Resend
+        import resend
+        resend_api_key = os.environ.get('RESEND_API_KEY')
+        
+        if resend_api_key:
+            resend.api_key = resend_api_key
+            developer_email = "multyspy@gmail.com"
+            
+            params = {
+                "from": "My Horse Manager <onboarding@resend.dev>",
+                "to": [developer_email],
+                "subject": f"[Feedback] My Horse Manager v{feedback.app_version or 'N/A'} - {user_name}",
+                "html": email_content,
+                "reply_to": user_email
+            }
+            
+            email_response = resend.Emails.send(params)
+            
+            # Save feedback to database for records
+            await db.feedback.insert_one({
+                "user_id": str(current_user["_id"]),
+                "user_email": user_email,
+                "user_name": user_name,
+                "message": feedback.message,
+                "app_version": feedback.app_version,
+                "platform": feedback.platform,
+                "email_sent": True,
+                "created_at": datetime.utcnow()
+            })
+            
+            return {"success": True, "message": "Feedback sent successfully"}
+        else:
+            # Save feedback but note email wasn't sent
+            await db.feedback.insert_one({
+                "user_id": str(current_user["_id"]),
+                "user_email": user_email,
+                "user_name": user_name,
+                "message": feedback.message,
+                "app_version": feedback.app_version,
+                "platform": feedback.platform,
+                "email_sent": False,
+                "created_at": datetime.utcnow()
+            })
+            
+            return {"success": True, "message": "Feedback saved (email service not configured)"}
+            
+    except Exception as e:
+        logging.error(f"Error sending feedback: {str(e)}")
+        # Still save feedback even if email fails
+        try:
+            await db.feedback.insert_one({
+                "user_id": str(current_user["_id"]),
+                "user_email": current_user.get("email", "Unknown"),
+                "message": feedback.message,
+                "app_version": feedback.app_version,
+                "platform": feedback.platform,
+                "email_sent": False,
+                "error": str(e),
+                "created_at": datetime.utcnow()
+            })
+        except:
+            pass
+        raise HTTPException(status_code=500, detail="Failed to send feedback")
+
 app.include_router(api_router)
 
 # Root endpoint for deployment health checks (required for Kubernetes)
