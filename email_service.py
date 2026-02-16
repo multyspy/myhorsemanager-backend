@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 from dotenv import load_dotenv
+import requests
 
 # Load environment variables
 ROOT_DIR = Path(__file__).parent
@@ -20,6 +21,7 @@ SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
 SMTP_USER = os.environ.get('SMTP_USER', '')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '')
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
 
 def create_metrics_html(metrics: Dict[str, Any]) -> str:
     """Create HTML email content with metrics"""
@@ -179,8 +181,36 @@ def send_email(
     html_content: str,
     text_content: Optional[str] = None
 ) -> bool:
-    """Send an email using SMTP"""
+    """Send an email using Resend API (primary) or SMTP (fallback)"""
     
+    # Try Resend first (works better with Railway)
+    if RESEND_API_KEY:
+        try:
+            response = requests.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "from": "My Horse Manager <onboarding@resend.dev>",
+                    "to": [to_email],
+                    "subject": subject,
+                    "html": html_content,
+                    "text": text_content or ""
+                },
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                logging.info(f"Email sent successfully via Resend to {to_email}")
+                return True
+            else:
+                logging.error(f"Resend error: {response.status_code} - {response.text}")
+        except Exception as e:
+            logging.error(f"Resend failed: {str(e)}")
+    
+    # Fallback to SMTP
     if not SMTP_USER or not SMTP_PASSWORD:
         logging.error("Email credentials not configured")
         return False
@@ -222,7 +252,7 @@ def send_email(
                 server.login(SMTP_USER, SMTP_PASSWORD)
                 server.sendmail(SMTP_USER, to_email, message.as_string())
         
-        logging.info(f"Email sent successfully to {to_email}")
+        logging.info(f"Email sent successfully via SMTP to {to_email}")
         return True
         
     except Exception as e:
