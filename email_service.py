@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any, List
 from pathlib import Path
 from dotenv import load_dotenv
 import requests
+import pytz
 
 # Load environment variables
 ROOT_DIR = Path(__file__).parent
@@ -22,6 +23,13 @@ SMTP_USER = os.environ.get('SMTP_USER', '')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '')
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
+
+# Timezone for Spain
+MADRID_TZ = pytz.timezone('Europe/Madrid')
+
+def get_madrid_time():
+    """Get current time in Madrid timezone"""
+    return datetime.now(MADRID_TZ)
 
 def create_metrics_html(metrics: Dict[str, Any]) -> str:
     """Create HTML email content with metrics"""
@@ -109,7 +117,7 @@ def create_metrics_html(metrics: Dict[str, Any]) -> str:
                 
                 <!-- Date -->
                 <p style="color: #666; text-align: center; margin-bottom: 24px;">
-                    📅 {datetime.now().strftime('%d de %B de %Y, %H:%M')}
+                    📅 {get_madrid_time().strftime('%d de %B de %Y, %H:%M')}
                 </p>
                 
                 <!-- Status Badge -->
@@ -269,7 +277,7 @@ def send_daily_report(metrics: Dict[str, Any]) -> bool:
         logging.error("Admin email not configured")
         return False
     
-    subject = f"🐴 My Horse Manager - Informe Diario ({datetime.now().strftime('%d/%m/%Y')})"
+    subject = f"🐴 My Horse Manager - Informe Diario ({get_madrid_time().strftime('%d/%m/%Y')})"
     
     # Check if there are critical alerts
     alerts = metrics.get('alerts', [])
@@ -311,7 +319,7 @@ def send_alert_email(alert_type: str, service: str, message: str, metrics: Dict[
                 <p style="font-size: 18px; margin: 0;">{message}</p>
             </div>
             <p style="color: #666;">
-                Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}<br>
+                Fecha: {get_madrid_time().strftime('%d/%m/%Y %H:%M:%S')}<br>
                 Servicio: {service}
             </p>
             <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
