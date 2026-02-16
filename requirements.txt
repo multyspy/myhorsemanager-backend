@@ -11,3 +11,4 @@ requests>=2.31.0
 python-multipart>=0.0.9
 APScheduler>=3.10.0
 pytz
+email-validator>=2.0.0
