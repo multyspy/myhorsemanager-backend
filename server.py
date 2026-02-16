@@ -3612,17 +3612,17 @@ async def startup_event():
         replace_existing=True
     )
     
-    # Schedule daily email report at 8:00 AM
+    # Schedule daily email report at 10:00 AM
     scheduler.add_job(
         send_daily_email_report,
-        CronTrigger(hour=8, minute=0, timezone='Europe/Madrid'),
+        CronTrigger(hour=10, minute=0, timezone='Europe/Madrid'),
         id='daily_email',
-        name='Daily Email Report at 8:00 AM',
+        name='Daily Email Report at 10:00 AM',
         replace_existing=True
     )
     
     scheduler.start()
-    logging.info("Schedulers started - Backup: 3:00 AM, Metrics: 3:30 AM, Email: 8:00 AM (Europe/Madrid)")
+    logging.info("Schedulers started - Backup: 3:00 AM, Metrics: 3:30 AM, Email: 10:00 AM (Europe/Madrid)")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
