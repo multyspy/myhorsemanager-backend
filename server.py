@@ -56,6 +56,10 @@ HORSE_EXPENSE_CATEGORIES = [
     "pupilaje",
     "herrador", 
     "veterinario",
+    "dentista",
+    "vacunas",
+    "desparasitacion",
+    "fisioterapia",
     "proveedores",
     "otros_propietarios",
     "alimentacion",
@@ -68,6 +72,10 @@ HORSE_CATEGORY_NAMES = {
     "pupilaje": "Pupilaje",
     "herrador": "Herrador",
     "veterinario": "Veterinario",
+    "dentista": "Dentista",
+    "vacunas": "Vacunas",
+    "desparasitacion": "Desparasitación",
+    "fisioterapia": "Fisioterapia",
     "proveedores": "Proveedores",
     "otros_propietarios": "Otros Propietarios",
     "alimentacion": "Alimentación",
@@ -362,6 +370,8 @@ class ExpenseBase(BaseModel):
     supplier_id: Optional[str] = None
     invoice_photo: Optional[str] = None  # Legacy single photo
     invoice_photos: Optional[List[str]] = []  # New: Multiple photos (base64)
+    is_recurring: Optional[bool] = False  # New: Monthly recurring expense
+    create_reminder: Optional[bool] = True  # New: Create automatic reminder
 
 class ExpenseCreate(ExpenseBase):
     pass
@@ -377,6 +387,8 @@ class ExpenseUpdate(BaseModel):
     supplier_id: Optional[str] = None
     invoice_photo: Optional[str] = None
     invoice_photos: Optional[List[str]] = None
+    is_recurring: Optional[bool] = None
+    create_reminder: Optional[bool] = None
 
 class Expense(ExpenseBase):
     id: str
@@ -395,6 +407,8 @@ class RiderExpenseBase(BaseModel):
     supplier_id: Optional[str] = None
     invoice_photo: Optional[str] = None  # Legacy single photo
     invoice_photos: Optional[List[str]] = []  # New: Multiple photos (base64)
+    is_recurring: Optional[bool] = False  # New: Monthly recurring expense
+    create_reminder: Optional[bool] = True  # New: Create automatic reminder
 
 class RiderExpenseCreate(RiderExpenseBase):
     pass
@@ -410,6 +424,8 @@ class RiderExpenseUpdate(BaseModel):
     supplier_id: Optional[str] = None
     invoice_photo: Optional[str] = None
     invoice_photos: Optional[List[str]] = None
+    is_recurring: Optional[bool] = None
+    create_reminder: Optional[bool] = None
 
 class RiderExpense(RiderExpenseBase):
     id: str
@@ -514,13 +530,15 @@ class ReminderBase(BaseModel):
     title: str
     description: Optional[str] = None
     reminder_date: str
-    reminder_time: Optional[str] = "09:00"
+    reminder_time: Optional[str] = "18:00"
     entity_type: str
     entity_id: Optional[str] = None
     category: Optional[str] = None
     is_automatic: bool = False
     is_completed: bool = False
     competition_id: Optional[str] = None
+    priority: Optional[str] = "info"  # info, importante, urgente
+    interval_days: Optional[int] = None  # Para reprogramación automática
 
 class ReminderCreate(ReminderBase):
     pass
@@ -534,6 +552,8 @@ class ReminderUpdate(BaseModel):
     entity_id: Optional[str] = None
     category: Optional[str] = None
     is_completed: Optional[bool] = None
+    priority: Optional[str] = None
+    interval_days: Optional[int] = None
 
 class Reminder(ReminderBase):
     id: str
@@ -702,13 +722,17 @@ def serialize_reminder(reminder: dict) -> dict:
         "title": reminder.get("title", ""),
         "description": reminder.get("description"),
         "reminder_date": reminder.get("reminder_date", ""),
-        "reminder_time": reminder.get("reminder_time", "09:00"),
+        "reminder_time": reminder.get("reminder_time", "18:00"),
         "entity_type": reminder.get("entity_type", "horse"),
         "entity_id": reminder.get("entity_id"),
         "category": reminder.get("category"),
         "is_automatic": reminder.get("is_automatic", False),
         "is_completed": reminder.get("is_completed", False),
         "competition_id": reminder.get("competition_id"),
+        "priority": reminder.get("priority", "info"),
+        "interval_days": reminder.get("interval_days"),
+        "is_preaviso": reminder.get("is_preaviso", False),
+        "last_completed_date": reminder.get("last_completed_date"),
         "created_at": reminder.get("created_at", datetime.utcnow()),
         "updated_at": reminder.get("updated_at", datetime.utcnow())
     }
@@ -811,6 +835,28 @@ async def login(credentials: UserLogin):
 @api_router.get("/auth/me", response_model=UserResponse)
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
     return serialize_user(current_user)
+
+@api_router.delete("/auth/delete-account")
+async def delete_user_account(current_user: dict = Depends(get_current_user)):
+    """Delete user account and all associated data"""
+    user_id = current_user["_id"]
+    
+    # Delete all user data
+    await db.horses.delete_many({"user_id": str(user_id)})
+    await db.riders.delete_many({"user_id": str(user_id)})
+    await db.suppliers.delete_many({"user_id": str(user_id)})
+    await db.expenses.delete_many({"user_id": str(user_id)})
+    await db.rider_expenses.delete_many({"user_id": str(user_id)})
+    await db.competitions.delete_many({"user_id": str(user_id)})
+    await db.palmares.delete_many({"user_id": str(user_id)})
+    await db.reminders.delete_many({"user_id": str(user_id)})
+    await db.budgets.delete_many({"user_id": str(user_id)})
+    await db.horse_rider_associations.delete_many({"user_id": str(user_id)})
+    
+    # Delete user
+    await db.users.delete_one({"_id": user_id})
+    
+    return {"message": "Account and all data deleted successfully"}
 
 @api_router.put("/auth/language")
 async def change_language(request: ChangeLanguageRequest, current_user: dict = Depends(get_current_user)):
@@ -1440,7 +1486,7 @@ async def create_competition_reminders(competition: dict, user_id: str):
                 "title": f"Concurso en 1 semana: {comp_name}",
                 "description": f"Preparar todo para el concurso en {competition.get('city', '')}",
                 "reminder_date": week_before.strftime("%Y-%m-%d"),
-                "reminder_time": "09:00",
+                "reminder_time": "18:00",
                 "entity_type": "competition",
                 "entity_id": comp_id,
                 "competition_id": comp_id,
@@ -1458,7 +1504,7 @@ async def create_competition_reminders(competition: dict, user_id: str):
                 "title": f"Concurso en 3 días: {comp_name}",
                 "description": f"Verificar inscripciones y preparativos",
                 "reminder_date": three_days.strftime("%Y-%m-%d"),
-                "reminder_time": "09:00",
+                "reminder_time": "18:00",
                 "entity_type": "competition",
                 "entity_id": comp_id,
                 "competition_id": comp_id,
@@ -1604,7 +1650,39 @@ async def create_expense(expense: ExpenseCreate, current_user: dict = Depends(ge
     result = await db.expenses.insert_one(expense_dict)
     created_expense = await db.expenses.find_one({"_id": result.inserted_id})
     
-    await create_automatic_reminder_suggestion(expense_dict, "horse", user_id)
+    # Create automatic reminder only if create_reminder is True
+    if expense_dict.get("create_reminder", True):
+        await create_automatic_reminder_suggestion(expense_dict, "horse", user_id)
+    
+    # Handle recurring expense - create monthly reminder
+    if expense_dict.get("is_recurring", False):
+        try:
+            expense_date = datetime.strptime(expense_dict.get("date", ""), "%Y-%m-%d")
+            next_month = expense_date + timedelta(days=30)
+            category_name = HORSE_CATEGORY_NAMES.get(expense_dict["category"], expense_dict["category"])
+            horse_name = horse.get("name", "")
+            
+            recurring_reminder = {
+                "user_id": user_id,
+                "title": f"Pago mensual: {category_name} - {horse_name}",
+                "description": f"Gasto recurrente de {expense_dict['amount']}€. Último pago: {expense_dict['date']}",
+                "reminder_date": next_month.strftime("%Y-%m-%d"),
+                "reminder_time": "18:00",
+                "entity_type": "horse",
+                "entity_id": expense.horse_id,
+                "category": expense_dict["category"],
+                "is_automatic": True,
+                "is_completed": False,
+                "priority": "importante",
+                "interval_days": 30,
+                "is_recurring_payment": True,
+                "recurring_amount": expense_dict["amount"],
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow()
+            }
+            await db.reminders.insert_one(recurring_reminder)
+        except Exception as e:
+            print(f"Error creating recurring reminder: {e}")
     
     return serialize_expense(created_expense)
 
@@ -1801,27 +1879,61 @@ async def delete_rider_expense(expense_id: str, current_user: dict = Depends(get
 
 # ==================== REMINDER ROUTES ====================
 
-AUTO_REMINDER_INTERVALS = {
-    "herrador": 42,
-    "veterinario": 365,
+# Intervalos por defecto para avisos automáticos (en días)
+DEFAULT_REMINDER_INTERVALS = {
+    # Caballos
+    "herrador": 45,           # 6-7 semanas
+    "veterinario": 365,       # Revisión anual
+    "dentista": 365,          # Revisión anual
+    "vacunas": 180,           # 6 meses (configurable por tipo)
+    "desparasitacion": 90,    # 3 meses
+    "fisioterapia": 30,       # Mensual si compite
+    # Jinetes
     "licencias": 365,
     "seguros": 365,
+    "equipamiento": 365,      # Revisión anual equipo
+    # Documentación
+    "pasaporte": 365,
+    "itv_remolque": 365,
 }
 
+# Categorías que generan aviso automático
+AUTO_REMINDER_CATEGORIES = list(DEFAULT_REMINDER_INTERVALS.keys())
+
+# Niveles de prioridad
+REMINDER_PRIORITY = {
+    "info": 1,
+    "importante": 2, 
+    "urgente": 3
+}
+
+async def get_entity_interval(user_id: str, entity_type: str, entity_id: str, category: str) -> int:
+    """Obtiene el intervalo personalizado para una entidad o usa el default"""
+    if entity_id:
+        # Buscar configuración personalizada del caballo/jinete
+        collection = db.horses if entity_type == "horse" else db.riders
+        entity = await collection.find_one({"_id": ObjectId(entity_id), "user_id": user_id})
+        if entity:
+            custom_intervals = entity.get("reminder_intervals", {})
+            if category in custom_intervals:
+                return custom_intervals[category]
+    return DEFAULT_REMINDER_INTERVALS.get(category, 30)
+
 async def create_automatic_reminder_suggestion(expense: dict, entity_type: str, user_id: str):
+    """Crea aviso automático basado en el gasto registrado"""
     category = expense.get("category")
-    if category not in AUTO_REMINDER_INTERVALS:
+    if category not in AUTO_REMINDER_CATEGORIES:
         return
     
-    interval = AUTO_REMINDER_INTERVALS[category]
+    entity_id = expense.get("horse_id") if entity_type == "horse" else expense.get("rider_id")
+    interval = await get_entity_interval(user_id, entity_type, entity_id, category)
     expense_date = expense.get("date", "")
     
     try:
         date_obj = datetime.strptime(expense_date, "%Y-%m-%d")
         next_date = date_obj + timedelta(days=interval)
         
-        entity_id = expense.get("horse_id") if entity_type == "horse" else expense.get("rider_id")
-        
+        # No crear si ya existe uno igual
         existing = await db.reminders.find_one({
             "user_id": user_id,
             "entity_type": entity_type,
@@ -1832,23 +1944,62 @@ async def create_automatic_reminder_suggestion(expense: dict, entity_type: str, 
         })
         
         if not existing:
-            category_name = HORSE_CATEGORY_NAMES.get(category) if entity_type == "horse" else RIDER_CATEGORY_NAMES.get(category)
+            category_name = HORSE_CATEGORY_NAMES.get(category, category) if entity_type == "horse" else RIDER_CATEGORY_NAMES.get(category, category)
+            
+            # Obtener nombre de la entidad
+            entity_name = ""
+            if entity_id:
+                collection = db.horses if entity_type == "horse" else db.riders
+                entity = await collection.find_one({"_id": ObjectId(entity_id)})
+                if entity:
+                    entity_name = entity.get("name", "")
+            
+            # Determinar prioridad según categoría
+            priority = "importante" if category in ["veterinario", "vacunas", "licencias", "seguros"] else "info"
+            
             reminder = {
                 "user_id": user_id,
-                "title": f"Recordatorio: {category_name}",
-                "description": f"Han pasado {interval} días desde el último {category_name.lower()}",
+                "title": f"{category_name}: {entity_name}" if entity_name else f"Recordatorio: {category_name}",
+                "description": f"Última vez: {expense_date}. Próxima: {next_date.strftime('%d/%m/%Y')}",
                 "reminder_date": next_date.strftime("%Y-%m-%d"),
-                "reminder_time": "09:00",
+                "reminder_time": "18:00",
                 "entity_type": entity_type,
                 "entity_id": entity_id,
                 "category": category,
                 "is_automatic": True,
                 "is_completed": False,
+                "priority": priority,
+                "interval_days": interval,  # Guardar intervalo para reprogramar
+                "last_completed_date": expense_date,  # Fecha del último
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow()
             }
             await db.reminders.insert_one(reminder)
-    except:
+            
+            # Crear preaviso 7 días antes si el intervalo es > 30 días
+            if interval > 30:
+                preaviso_date = next_date - timedelta(days=7)
+                if preaviso_date > datetime.now():
+                    preaviso = {
+                        "user_id": user_id,
+                        "title": f"Próximamente: {category_name} - {entity_name}" if entity_name else f"Próximamente: {category_name}",
+                        "description": f"En 7 días toca {category_name.lower()}",
+                        "reminder_date": preaviso_date.strftime("%Y-%m-%d"),
+                        "reminder_time": "18:00",
+                        "entity_type": entity_type,
+                        "entity_id": entity_id,
+                        "category": category,
+                        "is_automatic": True,
+                        "is_completed": False,
+                        "priority": "info",
+                        "is_preaviso": True,
+                        "parent_reminder_date": next_date.strftime("%Y-%m-%d"),
+                        "created_at": datetime.utcnow(),
+                        "updated_at": datetime.utcnow()
+                    }
+                    await db.reminders.insert_one(preaviso)
+    except Exception as e:
+        print(f"Error creating automatic reminder: {e}")
         pass
 
 @api_router.post("/reminders", response_model=Reminder)
@@ -1904,6 +2055,130 @@ async def get_upcoming_reminders(days: int = 7, current_user: dict = Depends(get
     }).sort("reminder_date", 1).to_list(100)
     
     return [serialize_reminder(r) for r in reminders]
+
+@api_router.post("/reminders/{reminder_id}/complete")
+async def complete_and_reschedule_reminder(
+    reminder_id: str, 
+    reschedule: bool = True,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Marca un aviso como completado y opcionalmente crea el siguiente automáticamente.
+    - reschedule=True: Crea el próximo aviso según el intervalo configurado
+    - reschedule=False: Solo marca como completado sin reprogramar
+    """
+    try:
+        user_id = str(current_user["_id"])
+        reminder = await db.reminders.find_one({"_id": ObjectId(reminder_id), "user_id": user_id})
+        
+        if not reminder:
+            raise HTTPException(status_code=404, detail="Reminder not found")
+        
+        # Marcar como completado
+        today = datetime.now().strftime("%Y-%m-%d")
+        await db.reminders.update_one(
+            {"_id": ObjectId(reminder_id)},
+            {"$set": {
+                "is_completed": True,
+                "completed_date": today,
+                "updated_at": datetime.utcnow()
+            }}
+        )
+        
+        # Eliminar preavisos asociados si existen
+        if reminder.get("is_automatic"):
+            await db.reminders.delete_many({
+                "user_id": user_id,
+                "is_preaviso": True,
+                "parent_reminder_date": reminder.get("reminder_date"),
+                "entity_id": reminder.get("entity_id"),
+                "category": reminder.get("category")
+            })
+        
+        next_reminder = None
+        
+        # Reprogramar si es automático y tiene categoría con intervalo
+        if reschedule and reminder.get("category"):
+            category = reminder.get("category")
+            entity_type = reminder.get("entity_type", "horse")
+            entity_id = reminder.get("entity_id")
+            
+            # Obtener intervalo (personalizado o default)
+            interval = reminder.get("interval_days")
+            if not interval:
+                interval = await get_entity_interval(user_id, entity_type, entity_id, category)
+            
+            if interval:
+                next_date = datetime.strptime(today, "%Y-%m-%d") + timedelta(days=interval)
+                
+                # Obtener nombre de categoría y entidad
+                category_name = HORSE_CATEGORY_NAMES.get(category, category) if entity_type == "horse" else RIDER_CATEGORY_NAMES.get(category, category)
+                entity_name = ""
+                if entity_id:
+                    collection = db.horses if entity_type == "horse" else db.riders
+                    entity = await collection.find_one({"_id": ObjectId(entity_id)})
+                    if entity:
+                        entity_name = entity.get("name", "")
+                
+                # Crear siguiente aviso
+                new_reminder = {
+                    "user_id": user_id,
+                    "title": f"{category_name}: {entity_name}" if entity_name else f"Recordatorio: {category_name}",
+                    "description": f"Última vez: {today}. Próxima: {next_date.strftime('%d/%m/%Y')}",
+                    "reminder_date": next_date.strftime("%Y-%m-%d"),
+                    "reminder_time": reminder.get("reminder_time", "18:00"),
+                    "entity_type": entity_type,
+                    "entity_id": entity_id,
+                    "category": category,
+                    "is_automatic": True,
+                    "is_completed": False,
+                    "priority": reminder.get("priority", "info"),
+                    "interval_days": interval,
+                    "last_completed_date": today,
+                    "created_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow()
+                }
+                result = await db.reminders.insert_one(new_reminder)
+                next_reminder = await db.reminders.find_one({"_id": result.inserted_id})
+                
+                # Crear preaviso si el intervalo es largo
+                if interval > 30:
+                    preaviso_date = next_date - timedelta(days=7)
+                    if preaviso_date > datetime.now():
+                        preaviso = {
+                            "user_id": user_id,
+                            "title": f"Próximamente: {category_name} - {entity_name}" if entity_name else f"Próximamente: {category_name}",
+                            "description": f"En 7 días toca {category_name.lower()}",
+                            "reminder_date": preaviso_date.strftime("%Y-%m-%d"),
+                            "reminder_time": "18:00",
+                            "entity_type": entity_type,
+                            "entity_id": entity_id,
+                            "category": category,
+                            "is_automatic": True,
+                            "is_completed": False,
+                            "priority": "info",
+                            "is_preaviso": True,
+                            "parent_reminder_date": next_date.strftime("%Y-%m-%d"),
+                            "created_at": datetime.utcnow(),
+                            "updated_at": datetime.utcnow()
+                        }
+                        await db.reminders.insert_one(preaviso)
+        
+        return {
+            "message": "Reminder completed successfully",
+            "completed_id": reminder_id,
+            "next_reminder": serialize_reminder(next_reminder) if next_reminder else None
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@api_router.get("/reminders/intervals")
+async def get_reminder_intervals(current_user: dict = Depends(get_current_user)):
+    """Obtiene los intervalos por defecto para avisos automáticos"""
+    return {
+        "default_intervals": DEFAULT_REMINDER_INTERVALS,
+        "categories": AUTO_REMINDER_CATEGORIES
+    }
 
 @api_router.put("/reminders/{reminder_id}", response_model=Reminder)
 async def update_reminder(reminder_id: str, reminder_update: ReminderUpdate, current_user: dict = Depends(get_current_user)):
@@ -3259,6 +3534,8 @@ async def download_frontend_file(filepath: str):
         "src/utils/mediaUtils.ts",
         "src/utils/api.ts",
         "src/i18n/translations.ts",
+        "src/i18n/index.ts",
+        "src/context/AuthContext.tsx",
         "app.json",
         "package.json"
     ]
