@@ -2743,6 +2743,7 @@ async def admin_get_all_users(
             "name": user.get("name", ""),
             "language": user.get("language", "es"),
             "is_admin": user.get("is_admin", False) or user.get("email", "").lower() in [e.lower() for e in ADMIN_EMAILS],
+            "is_premium": user.get("is_premium", False) or user.get("is_admin", False) or user.get("email", "").lower() in [e.lower() for e in ADMIN_EMAILS],
             "created_at": user.get("created_at", "").isoformat() if user.get("created_at") else None,
             "last_login": user.get("last_login", "").isoformat() if user.get("last_login") else None,
             "stats": {
@@ -2848,6 +2849,82 @@ async def admin_toggle_admin(user_id: str, admin_user: dict = Depends(get_admin_
     )
     
     return {"message": f"Admin status {'granted' if new_admin_status else 'revoked'}", "is_admin": new_admin_status}
+
+@api_router.put("/admin/users/{user_id}/toggle-premium")
+async def admin_toggle_premium(user_id: str, admin_user: dict = Depends(get_admin_user)):
+    """Toggle premium status for a user (admin only)"""
+    user = await db.users.find_one({"_id": ObjectId(user_id)})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    new_premium_status = not user.get("is_premium", False)
+    update_data = {
+        "is_premium": new_premium_status, 
+        "updated_at": datetime.utcnow()
+    }
+    
+    # Si se otorga premium, establecer fecha de vencimiento (1 año por defecto)
+    if new_premium_status:
+        update_data["premium_granted_at"] = datetime.utcnow()
+        update_data["premium_expires_at"] = datetime.utcnow() + timedelta(days=365)
+    else:
+        update_data["premium_granted_at"] = None
+        update_data["premium_expires_at"] = None
+    
+    await db.users.update_one(
+        {"_id": ObjectId(user_id)},
+        {"$set": update_data}
+    )
+    
+    return {
+        "message": f"Premium status {'granted' if new_premium_status else 'revoked'}", 
+        "is_premium": new_premium_status,
+        "premium_expires_at": update_data.get("premium_expires_at").isoformat() if update_data.get("premium_expires_at") else None
+    }
+
+class SetPremiumExpirationRequest(BaseModel):
+    expires_at: str  # ISO date string
+
+@api_router.put("/admin/users/{user_id}/set-premium-expiration")
+async def admin_set_premium_expiration(user_id: str, request: SetPremiumExpirationRequest, admin_user: dict = Depends(get_admin_user)):
+    """Set premium expiration date for a user (admin only)"""
+    user = await db.users.find_one({"_id": ObjectId(user_id)})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    try:
+        expires_at = datetime.fromisoformat(request.expires_at.replace('Z', '+00:00'))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format")
+    
+    await db.users.update_one(
+        {"_id": ObjectId(user_id)},
+        {"$set": {
+            "is_premium": True,
+            "premium_expires_at": expires_at,
+            "updated_at": datetime.utcnow()
+        }}
+    )
+    
+    return {"message": "Premium expiration updated", "premium_expires_at": expires_at.isoformat()}
+
+@api_router.get("/user/subscription-status")
+async def get_user_subscription_status(current_user: dict = Depends(get_current_user)):
+    """Get the subscription status for the current user"""
+    is_admin = current_user.get("is_admin", False) or current_user.get("email", "").lower() in [e.lower() for e in ADMIN_EMAILS]
+    is_premium = current_user.get("is_premium", False) or is_admin  # Admin siempre es premium
+    
+    # Obtener fecha de vencimiento
+    premium_expires_at = current_user.get("premium_expires_at")
+    premium_granted_at = current_user.get("premium_granted_at")
+    
+    return {
+        "is_premium": is_premium,
+        "is_admin": is_admin,
+        "premium_source": "admin" if is_admin else ("manual" if current_user.get("is_premium") else "none"),
+        "premium_expires_at": premium_expires_at.isoformat() if premium_expires_at else None,
+        "premium_granted_at": premium_granted_at.isoformat() if premium_granted_at else None,
+    }
 
 @api_router.get("/admin/check")
 async def admin_check(current_user: dict = Depends(get_current_user)):
@@ -3521,11 +3598,15 @@ async def download_all_files():
         "app/riders.tsx",
         "app/settings.tsx",
         "app/suppliers.tsx",
+        "app/subscription.tsx",
+        "app/myplan.tsx",
         "src/context/AuthContext.tsx",
+        "src/context/SubscriptionContext.tsx",
         "src/i18n/index.ts",
         "src/i18n/translations.ts",
         "src/utils/api.ts",
-        "src/utils/mediaUtils.ts"
+        "src/utils/mediaUtils.ts",
+        "src/utils/subscriptionLimits.ts"
     ]
     
     backend_files = [
